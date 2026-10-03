@@ -7,7 +7,8 @@ import { TimeProfileTable, DepartCompare, highRiskExposure, speedScore, routeSco
 import { api, PLACES, POLL_MS } from '../services/api.js'
 import KEYWORDS from '../data/distress-keywords.json'
 
-const DEFAULT_START = { latitude: 26.9196, longitude: 75.7878 }
+const DEFAULT_START = { name: 'Jaipur center (demo)', latitude: 26.9196, longitude: 75.7878 }
+const parseCoords = (q = '') => { const m = String(q).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/); if (!m) return null; const latitude = Number(m[1]), longitude = Number(m[2]); if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null; return { name: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`, latitude, longitude } }
 
 const bestRouteId = (list, preferenceValue) => {
   const usable = (list || []).filter((route) => route?.eta_min > 0)
@@ -73,6 +74,7 @@ export default function Home() {
   const [activeNav, setActiveNav] = useState('Home')
   const [departMode, setDepartMode] = useState('Now'), [departTime, setDepartTime] = useState('21:30'), [navCollapsed, setNavCollapsed] = useState(false)
   const [mapMode, setMapMode] = useState('safety'), [geoResults, setGeoResults] = useState([]), [geoBusy, setGeoBusy] = useState(false)
+  const [originMode, setOriginMode] = useState(false), [originQuery, setOriginQuery] = useState(''), [originResults, setOriginResults] = useState([]), [originBusy, setOriginBusy] = useState(false)
   const [livePoint, setLivePoint] = useState()
   const liveCrimeKey = useRef()
   const [currentPage, setCurrentPage] = useState('home')
@@ -335,18 +337,28 @@ export default function Home() {
     try { recognition.start() } catch { setIsListening(false) }
   }
 
-  const locate = () => navigator.geolocation
-    ? navigator.geolocation.getCurrentPosition((p) => setStart({ latitude: p.coords.latitude, longitude: p.coords.longitude }),
-        (e) => setErr(e.code === 1 ? 'Location permission denied. Using Jaipur Junction as the start.' : 'Could not read your location.'))
-    : setErr('Geolocation is not supported in this browser.')
-  const swapLocations = () => { const nextStart = dest; setDest(start); setStart(nextStart); setDestinationMode(false); setDestinationQuery('') }
+  const startLabel = start.name || `${start.latitude.toFixed(4)}, ${start.longitude.toFixed(4)}`
+  const pickOrigin = (place) => { setStart(place); setOriginMode(false); setOriginQuery(''); setOriginResults([]); setRoutes([]); setSel() }
+  const locate = () => {
+    if (!navigator.geolocation) { setNote('Geolocation is unavailable. Pick a start place or type coordinates.'); return }
+    navigator.geolocation.getCurrentPosition(
+      (p) => pickOrigin({ name: 'My location', latitude: p.coords.latitude, longitude: p.coords.longitude }),
+      () => setNote('Live location denied or unavailable. Choose a start place; routing does not need GPS.'),
+    )
+  }
+  const chooseOrigin = (value) => { if (value === '__search__') { setOriginMode(true); setOriginQuery(''); return } if (value === '__gps__') { locate(); return } const next = PLACES.find((p) => p.name === value); if (next) pickOrigin(next) }
+  const typeOrigin = (value) => { setOriginQuery(value); const coords = parseCoords(value); if (coords) { pickOrigin(coords); return } const next = PLACES.find((p) => p.name.toLowerCase() === value.trim().toLowerCase()); if (next) pickOrigin(next) }
+  const geocodeOrigin = async () => { const q = originQuery.trim(); if (!q) return; const coords = parseCoords(q); if (coords) { pickOrigin(coords); return } setOriginBusy(true); setErr()
+    const local = PLACES.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())), found = await api.geocode(q).catch(() => [])
+    setOriginBusy(false); const all = [...local, ...found]; setOriginResults(all); if (!all.length) setErr('No start places found. Try another name, lat,lng, or use my location.') }
+  const swapLocations = () => { const nextStart = dest; setDest({ ...start, name: startLabel }); setStart({ ...nextStart }); setOriginMode(false); setOriginQuery(''); setOriginResults([]); setDestinationMode(false); setDestinationQuery('') }
   const chooseDestination = (value) => { if (value === '__search__') { setDestinationMode(true); setDestinationQuery(''); return } const next = PLACES.find((p) => p.name === value); if (next) { setDest(next); setDestinationMode(false); setDestinationQuery('') } }
   const typeDestination = (value) => { setDestinationQuery(value); const next = PLACES.find((p) => p.name.toLowerCase() === value.trim().toLowerCase()); if (next) { setDest(next); setDestinationMode(false); setDestinationQuery('') } }
   const pickDestination = (place) => { setDest(place); setDestinationMode(false); setDestinationQuery(''); setGeoResults([]); setRoutes([]); setSel() }
-  const geocode = async () => { const q = destinationQuery.trim(); if (!q) return; setGeoBusy(true); setErr()
+  const geocode = async () => { const q = destinationQuery.trim(); if (!q) return; const coords = parseCoords(q); if (coords) { pickDestination(coords); return } setGeoBusy(true); setErr()
     const local = PLACES.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())), found = await api.geocode(q).catch(() => [])
     setGeoBusy(false); const all = [...local, ...found]; setGeoResults(all); if (!all.length) setErr('No places found. Try another name or click the map to set the destination.') }
-  const mapClick = (p) => { if (jid) return; pickDestination({ name: `Pinned ${p.latitude.toFixed(4)}, ${p.longitude.toFixed(4)}`, ...p }) }
+  const mapClick = (p) => { if (jid) return; const place = { name: `Pinned ${p.latitude.toFixed(4)}, ${p.longitude.toFixed(4)}`, ...p }; if (originMode) pickOrigin(place); else pickDestination(place) }
   const pinPoint = dest?.latitude != null ? dest : (gps || start)
   const pinSource = dest?.latitude != null ? 'pin' : (gps ? 'gps' : 'origin')
   useEffect(() => {
@@ -372,11 +384,12 @@ export default function Home() {
     setPreference(next)
     if (routes.length) setSel(bestRouteId(routes, next))
   }
-  const search = async () => { if (destinationMode) { await geocode(); return } setBusy(true); setNote(); const r = await run(() => api.search(start, dest)); setBusy(false)
+  const search = async () => { if (originMode) { await geocodeOrigin(); return } if (destinationMode) { await geocode(); return } setBusy(true); setNote(); const r = await run(() => api.search(start, dest)); setBusy(false)
     if (r) { setRoutes(r.routes); setSel(bestRouteId(r.routes, preference)); if (!r.routes.length) setErr('No routes found.') } }
   const begin = async () => { const r = await run(() => api.start(sel)); if (r) { setJid(r.journey_id); refresh(r.journey_id)
-    if (navigator.geolocation) watch.current = navigator.geolocation.watchPosition((p) => setGps({ latitude: p.coords.latitude, longitude: p.coords.longitude }), () => setNote('Live location is unavailable; using simulated navigation.'))
-    else setNote('Live location is unavailable; using simulated navigation.') } }
+    // FREEZE_SIM_WALK: pin stays at last real GPS or start; do not follow simulated st.position.
+    if (navigator.geolocation) watch.current = navigator.geolocation.watchPosition((p) => setGps({ latitude: p.coords.latitude, longitude: p.coords.longitude }), () => setNote('Live location is unavailable. Pin stays at the last started position until GPS updates.'))
+    else setNote('Live location is unavailable. Pin stays at the last started position until GPS updates.') } }
   const refresh = async (id = jid) => { const s = await run(() => api.status(id)); if (s) setSt(s) }
   useEffect(() => { if (!jid || st?.status === 'completed') return; const t = setInterval(refresh, POLL_MS); return () => clearInterval(t) }, [jid, st?.status])
   useEffect(() => { if (st?.status === 'completed' && watch.current !== undefined) { navigator.geolocation?.clearWatch(watch.current); watch.current = undefined } }, [st?.status])
@@ -431,8 +444,6 @@ export default function Home() {
         setSosStatus({
           ...payload,
           status: 'EMERGENCY_ACTIVE',
-          risk_score: 0,
-          risk_level: 'LOW',
           countdown_required: false,
           countdown_seconds: 0,
           sos_trigger: payload.sos_trigger || 'AUTO',
@@ -444,7 +455,7 @@ export default function Home() {
         setCountdownSeconds(0)
         countdownTriggeredRef.current = true
         setMapMode('safepoints')
-        setSosNotice('SOS ACTIVATED - Help contacted and is on the way.')
+        setSosNotice('SOS ACTIVATED. Help contacted and is on the way.')
         return
       }
       setSosStatus(payload)
@@ -475,13 +486,12 @@ export default function Home() {
       latitude: start.latitude,
       longitude: start.longitude,
       public_origin: window.location.origin,
+      nav_journey_id: jid,
     }))
     if (payload) {
       setSosStatus({
         ...payload,
         status: 'EMERGENCY_ACTIVE',
-        risk_score: 0,
-        risk_level: 'LOW',
         countdown_required: false,
         countdown_seconds: 0,
         sos_trigger: payload.sos_trigger || triggerType,
@@ -489,7 +499,7 @@ export default function Home() {
         help_alerted: payload.help_alerted,
         guardian_count: payload.guardian_count,
       })
-      setSosNotice(payload.dashboard_url ? `SOS ACTIVATED. Guardian dashboard: ${payload.dashboard_url}` : `SOS ACTIVATED - help contacted and is on the way. Alerts sent to ${recipients}.`)
+      setSosNotice(`SOS triggered. Help contacted and is on the way. Alerts sent to ${recipients}.`)
       setCountdownOpen(false)
       setCountdownSeconds(0)
       countdownTriggeredRef.current = true
@@ -499,6 +509,26 @@ export default function Home() {
   }
 
   const triggerManualSos = () => createEmergency('MANUAL')
+  const shareLiveDashboard = async () => {
+    // SHARE_LIVE_DASHBOARD_AFTER_START: shown only while a nav journey is active, never beside Find.
+    if (!ensureGuardiansConfigured()) return
+    if (!jid) {
+      setNote('Start the route first, then share live location with guardians.')
+      return
+    }
+    const payload = await run(() => api.shareTrip({
+      nav_journey_id: jid,
+      user_name: emergencyProfile.name || 'Traveler',
+      public_origin: window.location.origin,
+      sos_journey_id: sosJourney?.journey_id,
+    }))
+    if (payload) {
+      const captured = payload.captured ? ' Email body captured locally because SMTP is not configured.' : ''
+      setNote(payload.dashboard_url
+        ? `Live location shared. Guardians can open the same Guardian dashboard: ${payload.dashboard_url}.${captured}`
+        : `Trip share prepared for guardians.${captured}`)
+    }
+  }
   const triggerTopBarSos = async () => {
     if (!ensureGuardiansConfigured() || isEmergencyActive) return
     if (sosJourney) {
@@ -710,6 +740,7 @@ export default function Home() {
         <div className="panel-heading">
           <div><span className="eyebrow">04 · Intelligent SOS</span><h2>Safety monitor</h2></div>
         </div>
+        {isEmergencyActive && <div className="traveler-sos-banner" role="status">SOS triggered, check email for guardian/SOS dashboard.</div>}
         {!sosJourney && <button className="sos-button sos-button-primary" onClick={startSafetyJourney}>Activate safety monitor</button>}
         {sosJourney && <div className="sos-panel-body">
           <div className="sos-header">
@@ -721,7 +752,6 @@ export default function Home() {
           </div>
 
           {sosStatus?.countdown_required && <div className="alert"><strong>POSSIBLE EMERGENCY DETECTED</strong><p className="muted">Are you safe? Automatic SOS in {sosStatus.countdown_seconds}s</p></div>}
-          {isEmergencyActive && <div className="alert emergency-alert"><strong>SOS ACTIVATED</strong><p className="muted">Emergency state active. Guardians have been notified and help is on the way.</p></div>}
 
           <div className="risk-display-wrap">
             <div className="risk-label">Risk score</div>
@@ -765,13 +795,13 @@ export default function Home() {
       </div>}
 
       <section className="search-panel">
-        <div className="search-fields"><label><span>From</span><div className="field"><span className="field-icon blue">⌖</span><input readOnly value={`${start.latitude.toFixed(4)}, ${start.longitude.toFixed(4)}`} /><button className="locate-button" onClick={locate} title="Use my location">◎</button></div></label><button className="swap-button" onClick={swapLocations} title="Swap locations">⇄</button><label><span>To</span>{destinationMode ? <div className="field destination-search"><span className="field-icon red">●</span><input autoFocus value={destinationQuery} onChange={(e) => typeDestination(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && geocode()} placeholder="Search any place..." /><button className="locate-button" onClick={geocode} title="Search">{geoBusy ? '…' : '⌕'}</button></div> : <div className="field"><span className="field-icon red">●</span><select value={dest.name} onChange={(e) => chooseDestination(e.target.value)}><option value="__search__">Search any place...</option>{!PLACES.some((p) => p.name === dest.name) && <option>{dest.name}</option>}{PLACES.map((p) => <option key={p.name}>{p.name}</option>)}</select></div>}{destinationMode && geoResults.length > 0 && <div className="geo-results">{geoResults.map((p) => <button key={p.name + p.latitude} type="button" onClick={() => pickDestination(p)}>{p.name}</button>)}</div>}{destinationMode && <small className="muted destination-note">Press Enter to search, or click the map to drop a destination pin.</small>}</label><label className="departure"><span>Depart at</span><div className="field"><span className="field-icon">◷</span><select value={departMode} onChange={(e) => setDepartMode(e.target.value)}><option>Now</option><option value="Custom">Custom time</option></select>{departMode === 'Custom' && <input type="time" className="depart-time" value={departTime} onChange={(e) => setDepartTime(e.target.value)} />}</div></label><button className="find-button" onClick={search} disabled={busy || Boolean(jid)}>{busy ? 'Finding…' : jid ? 'Route active' : destinationMode ? 'Search place' : 'Find Safe Routes'} <span>→</span></button></div>
+        <div className="search-fields"><label><span>From</span>{originMode ? <div className="field destination-search"><span className="field-icon blue">⌖</span><input autoFocus value={originQuery} onChange={(e) => typeOrigin(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && geocodeOrigin()} placeholder="Search start or lat,lng..." /><button className="locate-button" onClick={geocodeOrigin} title="Search">{originBusy ? '…' : '⌕'}</button><button className="locate-button" onClick={locate} title="Use my location">◎</button></div> : <div className="field"><span className="field-icon blue">⌖</span><select value={startLabel} onChange={(e) => chooseOrigin(e.target.value)}><option value="__search__">Search any place...</option><option value="__gps__">Use my location</option>{!PLACES.some((p) => p.name === startLabel) && startLabel && <option>{startLabel}</option>}{PLACES.map((p) => <option key={p.name}>{p.name}</option>)}</select><button className="locate-button" onClick={locate} title="Use my location">◎</button></div>}{originMode && originResults.length > 0 && <div className="geo-results">{originResults.map((p) => <button key={'o' + p.name + p.latitude} type="button" onClick={() => pickOrigin(p)}>{p.name}</button>)}</div>}{originMode && <small className="muted destination-note">Press Enter to search a start, type lat,lng, or use my location. GPS is optional.</small>}</label><button className="swap-button" onClick={swapLocations} title="Swap locations">⇄</button><label><span>To</span>{destinationMode ? <div className="field destination-search"><span className="field-icon red">●</span><input autoFocus value={destinationQuery} onChange={(e) => typeDestination(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && geocode()} placeholder="Search any place..." /><button className="locate-button" onClick={geocode} title="Search">{geoBusy ? '…' : '⌕'}</button></div> : <div className="field"><span className="field-icon red">●</span><select value={dest.name} onChange={(e) => chooseDestination(e.target.value)}><option value="__search__">Search any place...</option>{!PLACES.some((p) => p.name === dest.name) && <option>{dest.name}</option>}{PLACES.map((p) => <option key={p.name}>{p.name}</option>)}</select></div>}{destinationMode && geoResults.length > 0 && <div className="geo-results">{geoResults.map((p) => <button key={p.name + p.latitude} type="button" onClick={() => pickDestination(p)}>{p.name}</button>)}</div>}{destinationMode && <small className="muted destination-note">Press Enter to search, or click the map to drop a destination pin.</small>}</label><label className="departure"><span>Depart at</span><div className="field"><span className="field-icon">◷</span><select value={departMode} onChange={(e) => setDepartMode(e.target.value)}><option>Now</option><option value="Custom">Custom time</option></select>{departMode === 'Custom' && <input type="time" className="depart-time" value={departTime} onChange={(e) => setDepartTime(e.target.value)} />}</div></label><button className="find-button" onClick={search} disabled={busy || Boolean(jid)}>{busy ? 'Finding…' : jid ? 'Route active' : (originMode || destinationMode) ? 'Search place' : 'Find Safe Routes'} <span>→</span></button></div>
         {departAt && <DepartCompare route={activeRoute} time={departAt} preference={preference} minEta={minEta} />}<div className="preference"><span className="preference-icon">✦</span><div><b>Safety-Time Preference</b><small>Adjust how much you want to prioritise safety vs faster travel.</small></div><div className="preference-control"><span>Faster Travel</span><input type="range" min="0" max="100" value={preference} onChange={(e) => changePreference(e.target.value)} /><span>Safer Travel</span><div className="preference-labels"><small>Shorter time, higher risk</small><strong>{preference < 40 ? 'Faster Travel' : preference > 60 ? 'Safer Travel' : 'Balanced (Recommended)'}</strong><small>May take longer, higher safety</small></div></div></div>
       </section>
       {err && <ErrorState message={err} />}{busy && <LoadingState text="Finding real road routes…" />}
       <section className="dashboard-grid">
-        <div className="route-column"><div className="section-heading"><div><span className="eyebrow">Route planning</span><h2>Route Options <em>{routes.length || (jid ? 1 : 0)}</em></h2></div><select className="sort-select" defaultValue="recommended"><option value="recommended">Recommended</option></select></div>{!jid && scoredRoutes.map((r) => <RouteCard key={r.id} r={r} selected={r.id === sel} onSelect={setSel} />)}{!jid && !routes.length && <div className="empty-card"><span className="empty-icon">⌁</span><b>Find a safe route</b><p>Choose your destination and compare real road routes.</p></div>}{jid && st && <JourneyStatus s={st} />}{!jid && sel && <><SelectedRouteSummary r={selectedRoute} /><button className="start-button" onClick={begin}>START ROUTE <span>→</span></button></>}{jid && st && <><div className="journey-actions">{st.reroute && <RerouteCard rr={st.reroute} onSwitch={doSwitch} onKeep={keep} />}{!st.reroute && st.status !== 'completed' && <WhyNotCard analysis={st.reroute_analysis} />}{note && <p className="muted">{note}</p>}{!st.incidents_ahead.length && st.status !== 'completed' && <p className="muted">No incidents ahead.</p>}<button className="demo-button" onClick={inject}>Demo: inject accident 600 m ahead</button><button className="start-button stop-button" onClick={stopRoute}>{st.status === 'completed' ? 'END ROUTE' : 'STOP ROUTE'} <span>■</span></button></div></>}</div>
-        <div className="map-column"><div className="map-toolbar"><div className="map-tabs">{[['safety', '◉ Safety View'], ['safepoints', '⌖ Safe Points'], ['heatmap', '◌ Risk Heatmap'], ['time', '◷ Time Profile']].map(([k, label]) => <button type="button" key={k} className={mapMode === k ? 'active' : ''} onClick={() => setMapMode(k)}>{label}</button>)}</div><span className="map-expand">⛶</span></div><MapView routes={shown} selectedId={jid ? st?.route_id : sel} alt={st?.reroute?.alternative} incidents={st?.incidents_ahead || []} heatmapIncidents={incidents} position={gps || st?.position} start={start} dest={dest} mode={mapMode} safePoints={safePoints} onMapClick={mapClick} />{mapMode === 'time' && <div className="time-overlay panel"><TimeProfileTable route={pinScoredRoute} preference={preference} minEta={minEta} /></div>}</div>
+        <div className="route-column"><div className="section-heading"><div><span className="eyebrow">Route planning</span><h2>Route Options <em>{routes.length || (jid ? 1 : 0)}</em></h2></div><select className="sort-select" defaultValue="recommended"><option value="recommended">Recommended</option></select></div>{!jid && scoredRoutes.map((r) => <RouteCard key={r.id} r={r} selected={r.id === sel} onSelect={setSel} />)}{!jid && !routes.length && <div className="empty-card"><span className="empty-icon">⌁</span><b>Find a safe route</b><p>Choose your destination and compare real road routes.</p></div>}{jid && st && <JourneyStatus s={st} />}{!jid && sel && <><SelectedRouteSummary r={selectedRoute} /><button className="start-button" onClick={begin}>START ROUTE <span>→</span></button></>}{jid && st && <><div className="journey-actions">{st.reroute && <RerouteCard rr={st.reroute} onSwitch={doSwitch} onKeep={keep} />}{!st.reroute && st.status !== 'completed' && <WhyNotCard analysis={st.reroute_analysis} />}{note && <p className="muted">{note}</p>}{!st.incidents_ahead.length && st.status !== 'completed' && <p className="muted">No incidents ahead.</p>}<button type="button" className="share-live-dashboard-button" data-share-after-start="1" onClick={shareLiveDashboard} title="Email guardians a live Guardian dashboard link">Share live location</button><button className="demo-button" onClick={inject}>Demo: inject accident 600 m ahead</button><button className="start-button stop-button" onClick={stopRoute}>{st.status === 'completed' ? 'END ROUTE' : 'STOP ROUTE'} <span>■</span></button></div></>}</div>
+        <div className="map-column"><div className="map-toolbar"><div className="map-tabs">{[['safety', '◉ Safety View'], ['safepoints', '⌖ Safe Points'], ['heatmap', '◌ Risk Heatmap'], ['time', '◷ Time Profile']].map(([k, label]) => <button type="button" key={k} className={mapMode === k ? 'active' : ''} onClick={() => setMapMode(k)}>{label}</button>)}</div><span className="map-expand">⛶</span></div><MapView routes={shown} selectedId={jid ? st?.route_id : sel} alt={st?.reroute?.alternative} incidents={st?.incidents_ahead || []} heatmapIncidents={incidents} position={gps || (jid ? start : undefined)} start={start} dest={dest} mode={mapMode} safePoints={safePoints} onMapClick={mapClick} />{mapMode === 'time' && <div className="time-overlay panel"><TimeProfileTable route={pinScoredRoute} preference={preference} minEta={minEta} /></div>}</div>
         <div className="intel-column"><SafetyProfile route={pinScoredRoute} preference={preference} minEta={minEta} livePoint={livePoint} /><SafePointPanel route={activeRoute} points={safePoints} /><IndependencePanel routes={routes} incidents={incidents} /><IncidentSummary incidents={incidents} /></div>
       </section>
       <AnalysisPanel route={activeRoute} incidents={incidents} analysis={st?.reroute_analysis} />

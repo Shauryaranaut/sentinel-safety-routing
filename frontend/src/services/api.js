@@ -18,6 +18,7 @@ export const api = {
   safetyStatus: (journey_id) => fetch(`/journeys/${journey_id}/status`).then(j),
   signal: (body) => post('/signals', body),
   createEmergency: (body) => post('/emergencies', body),
+  shareTrip: (body) => post('/monitor/share', body),
 }
 export const PLACES = [
   { name: 'Amber Fort', latitude: 26.9855, longitude: 75.8513 },

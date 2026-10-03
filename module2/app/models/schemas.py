@@ -73,6 +73,14 @@ class EmergencyCreateRequest(BaseModel):
     accuracy: Optional[float] = None
     user_name: Optional[str] = "User"
     public_origin: Optional[str] = None
+    nav_journey_id: Optional[str] = None
+
+
+class ShareTripRequest(BaseModel):
+    nav_journey_id: str
+    user_name: Optional[str] = "User"
+    public_origin: Optional[str] = None
+    sos_journey_id: Optional[str] = None
 
 class EmergencyResolveRequest(BaseModel):
     reason: str = "SAFE"
@@ -89,7 +97,7 @@ class AssistantAskRequest(BaseModel):
 class EmergencyResponse(BaseModel):
     id: str
     journey_id: str
-    trigger_type: TriggerType
+    trigger_type: str
     user_name: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
@@ -100,6 +108,23 @@ class EmergencyResponse(BaseModel):
     risk_level: str
     trigger_reasons: list[str] = Field(default_factory=list)
     events: list[dict] = Field(default_factory=list)
+    safety: Optional[float] = None
+    factors: dict[str, Any] = Field(default_factory=dict)
+    progress_m: Optional[float] = None
+    distance_m: Optional[float] = None
+    eta_min: Optional[float] = None
+    geometry: list[Any] = Field(default_factory=list)
+    position: Optional[dict[str, Any]] = None
+    last_known: Optional[dict[str, Any]] = None
+    location_live: Optional[bool] = None
+    incidents_ahead: list[dict] = Field(default_factory=list)
+    route_id: Optional[str] = None
+    nav_status: Optional[str] = None
+    nav_journey_id: Optional[str] = None
+    sos_journey_id: Optional[str] = None
+    sos_active: bool = False
+    sos_status: Optional[str] = None
+    monitor_kind: str = "emergency"
 
 class EmergencyContactEntry(BaseModel):
     label: str = "Emergency"

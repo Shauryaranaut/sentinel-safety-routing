@@ -14,10 +14,8 @@ def start(route_id):
     return jid
 
 def _advance(j, r):
-    speed = r["distance_m"]/r["duration_s"]
-    now = time.time()
-    j["progress"] = min(j["progress"] + (now-j["t"])*speed*settings.sim_speed, r["distance_m"])
-    j["t"] = now
+    # FREEZE_SIM_WALK: do not interpolate along geometry on a timer (SIM_SPEED / MOCK_MODE demo walk).
+    j["t"] = time.time()
 
 def status(jid):
     j = store.journeys[jid]; r = store.routes[j["route_id"]]
