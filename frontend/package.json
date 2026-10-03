@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/lib/routeProfile.test.js"
+    "test": "node --test src/lib/routeProfile.test.js src/lib/navigation.test.js"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

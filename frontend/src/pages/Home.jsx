@@ -2,10 +2,12 @@
 import { Phone } from 'lucide-react'
 import IncomingCallScreen from '../components/IncomingCallScreen.jsx'
 import MapView from '../components/MapView.jsx'
+import NavigationHud from '../components/NavigationHud.jsx'
 import SafetyAssistantPanel from '../components/SafetyAssistantPanel.jsx'
 import { TimeProfileTable, DepartCompare, highRiskExposure, speedScore, routeScore, RouteCard, SelectedRouteSummary, RerouteCard, WhyNotCard, IncidentSummary, SafetyProfile, SafePointPanel, IndependencePanel, AnalysisPanel, JourneyStatus, LoadingState, ErrorState } from '../components/Parts.jsx'
 import { api, PLACES, POLL_MS } from '../services/api.js'
 import KEYWORDS from '../data/distress-keywords.json'
+import { navigationCue, snapToRoute } from '../lib/navigation.js'
 
 const DEFAULT_START = { name: 'Jaipur center (demo)', latitude: 26.9196, longitude: 75.7878 }
 const parseCoords = (q = '') => { const m = String(q).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/); if (!m) return null; const latitude = Number(m[1]), longitude = Number(m[2]); if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null; return { name: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`, latitude, longitude } }
@@ -665,6 +667,16 @@ export default function Home() {
   const chosenId = bestRouteId(routes, preference)
   const scoredRoutes = routes.map((r) => ({ ...r, high_risk_min: highRiskExposure(r, incidents).minutes, route_score: routeScore(r.safety, speedScore(r, minEta), preference), recommended: r.id === chosenId })).sort((a, b) => b.route_score - a.route_score || a.eta_min - b.eta_min)
   const safePoints = (activeRoute?.safe_points?.length ? activeRoute.safe_points : nearbySafePoints)
+  const navGeometry = st?.geometry || activeRoute?.geometry
+  const navFix = (() => {
+    if (!jid || !navGeometry) return null
+    if (gps) {
+      const snap = snapToRoute(navGeometry, gps)
+      if (snap && snap.offRouteM <= 80) return gps
+    }
+    return st?.position || gps || start
+  })()
+  const cue = jid ? navigationCue({ geometry: navGeometry, steps: st?.steps, position: navFix, progressM: st?.progress_m || 0, arrived: st?.status === 'completed' }) : null
   const departAt = departMode === 'Custom' ? departTime : undefined
   const shown = st ? [{ id: st.route_id, geometry: st.geometry }] : routes
 
@@ -716,7 +728,7 @@ export default function Home() {
     </div></>)
   }
 
-  return (<>{fakeCallActive && <IncomingCallScreen onDismiss={() => setFakeCallActive(false)} />}<div className={'dashboard' + (navCollapsed ? ' nav-collapsed' : '')}>
+  return (<>{fakeCallActive && <IncomingCallScreen onDismiss={() => setFakeCallActive(false)} />}<div className={'dashboard' + (navCollapsed ? ' nav-collapsed' : '') + (jid ? ' navigating' : '')}>
     <aside className={'sidebar' + (navCollapsed ? ' collapsed' : '')}>
       <div className="brand"><span className="brand-mark">✦</span><div className="nav-text"><strong>SENTINEL</strong><small>Safe navigation</small></div><button type="button" className="collapse-toggle" onClick={() => setNavCollapsed((v) => !v)} title="Toggle sidebar">{navCollapsed ? '»' : '«'}</button></div>
       <nav className="sidebar-nav">{navItems.map(({ icon, label }) => (
@@ -801,7 +813,7 @@ export default function Home() {
       {err && <ErrorState message={err} />}{busy && <LoadingState text="Finding real road routes…" />}
       <section className="dashboard-grid">
         <div className="route-column"><div className="section-heading"><div><span className="eyebrow">Route planning</span><h2>Route Options <em>{routes.length || (jid ? 1 : 0)}</em></h2></div><select className="sort-select" defaultValue="recommended"><option value="recommended">Recommended</option></select></div>{!jid && scoredRoutes.map((r) => <RouteCard key={r.id} r={r} selected={r.id === sel} onSelect={setSel} />)}{!jid && !routes.length && <div className="empty-card"><span className="empty-icon">⌁</span><b>Find a safe route</b><p>Choose your destination and compare real road routes.</p></div>}{jid && st && <JourneyStatus s={st} />}{!jid && sel && <><SelectedRouteSummary r={selectedRoute} /><button className="start-button" onClick={begin}>START ROUTE <span>→</span></button></>}{jid && st && <><div className="journey-actions">{st.reroute && <RerouteCard rr={st.reroute} onSwitch={doSwitch} onKeep={keep} />}{!st.reroute && st.status !== 'completed' && <WhyNotCard analysis={st.reroute_analysis} />}{note && <p className="muted">{note}</p>}{!st.incidents_ahead.length && st.status !== 'completed' && <p className="muted">No incidents ahead.</p>}<button type="button" className="share-live-dashboard-button" data-share-after-start="1" onClick={shareLiveDashboard} title="Email guardians a live Guardian dashboard link">Share live location</button><button className="demo-button" onClick={inject}>Demo: inject accident 600 m ahead</button><button className="start-button stop-button" onClick={stopRoute}>{st.status === 'completed' ? 'END ROUTE' : 'STOP ROUTE'} <span>■</span></button></div></>}</div>
-        <div className="map-column"><div className="map-toolbar"><div className="map-tabs">{[['safety', '◉ Safety View'], ['safepoints', '⌖ Safe Points'], ['heatmap', '◌ Risk Heatmap'], ['time', '◷ Time Profile']].map(([k, label]) => <button type="button" key={k} className={mapMode === k ? 'active' : ''} onClick={() => setMapMode(k)}>{label}</button>)}</div><span className="map-expand">⛶</span></div><MapView routes={shown} selectedId={jid ? st?.route_id : sel} alt={st?.reroute?.alternative} incidents={st?.incidents_ahead || []} heatmapIncidents={incidents} position={gps || (jid ? start : undefined)} start={start} dest={dest} mode={mapMode} safePoints={safePoints} onMapClick={mapClick} />{mapMode === 'time' && <div className="time-overlay panel"><TimeProfileTable route={pinScoredRoute} preference={preference} minEta={minEta} /></div>}</div>
+        <div className="map-column">{!jid && <div className="map-toolbar"><div className="map-tabs">{[['safety', '◉ Safety View'], ['safepoints', '⌖ Safe Points'], ['heatmap', '◌ Risk Heatmap'], ['time', '◷ Time Profile']].map(([k, label]) => <button type="button" key={k} className={mapMode === k ? 'active' : ''} onClick={() => setMapMode(k)}>{label}</button>)}</div><span className="map-expand">⛶</span></div>}<MapView routes={shown} selectedId={jid ? st?.route_id : sel} alt={st?.reroute?.alternative} incidents={st?.incidents_ahead || []} heatmapIncidents={incidents} position={jid ? navFix : (gps || undefined)} start={start} dest={dest} mode={mapMode} safePoints={safePoints} onMapClick={mapClick} follow={Boolean(jid && navFix && st?.status !== 'completed')} heading={cue?.heading} />{jid && <NavigationHud cue={cue} destName={dest?.name} etaMin={st?.eta_min} onStop={stopRoute} completed={st?.status === 'completed'} />}{!jid && mapMode === 'time' && <div className="time-overlay panel"><TimeProfileTable route={pinScoredRoute} preference={preference} minEta={minEta} /></div>}</div>
         <div className="intel-column"><SafetyProfile route={pinScoredRoute} preference={preference} minEta={minEta} livePoint={livePoint} /><SafePointPanel route={activeRoute} points={safePoints} /><IndependencePanel routes={routes} incidents={incidents} /><IncidentSummary incidents={incidents} /></div>
       </section>
       <AnalysisPanel route={activeRoute} incidents={incidents} analysis={st?.reroute_analysis} />

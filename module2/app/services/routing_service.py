@@ -25,6 +25,7 @@ import uuid
 import httpx
 
 from app.config import settings
+from app.services.directions import maneuvers_from_geometry, steps_from_ors
 log = logging.getLogger("routing")
 
 
@@ -193,12 +194,14 @@ class RoutingService:
                 summary.get("duration", 0)
             )
 
+            steps = steps_from_ors(properties, geom) or maneuvers_from_geometry(geom)
             routes.append(
                 self._mk(
                     geom=geom,
                     dist=distance_m,
                     dur=duration_s,
                     src="ors",
+                    steps=steps,
                 )
             )
 
@@ -228,7 +231,7 @@ class RoutingService:
         return routes
 
     @staticmethod
-    def _mk(geom, dist, dur, src):
+    def _mk(geom, dist, dur, src, steps=None):
         """
         Create the standard Sentinel route object.
         """
@@ -243,4 +246,6 @@ class RoutingService:
             "duration_s": float(dur),
 
             "source": src,
+
+            "steps": steps if steps is not None else maneuvers_from_geometry(geom),
         }

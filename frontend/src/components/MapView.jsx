@@ -12,7 +12,7 @@ export const segmentSafety = (base, a, b, incidents) => {
   const penalty = incidents.reduce((sum, i) => { const d = meters(mid, [i.latitude, i.longitude]); return d < 900 ? sum + (Number(i.severity) || .5) * 40 * (1 - d / 900) : sum }, 0)
   return Math.max(0, Math.min(100, base - penalty))
 }
-export default function MapView({ routes = [], selectedId, alt, incidents = [], heatmapIncidents = [], position, start, dest, mode = 'safety', safePoints = [], onMapClick }) {
+export default function MapView({ routes = [], selectedId, alt, incidents = [], heatmapIncidents = [], position, start, dest, mode = 'safety', safePoints = [], onMapClick, follow = false, heading = null }) {
   const el = useRef(), map = useRef(), layer = useRef(), clickRef = useRef()
   clickRef.current = onMapClick
   useEffect(() => {
@@ -55,9 +55,18 @@ export default function MapView({ routes = [], selectedId, alt, incidents = [], 
       L.circleMarker(ll(i), { radius: 9, color: '#fff', fillColor: '#ff4d4f', fillOpacity: 1 }).bindTooltip(i.title).addTo(g) })
     if (start) L.circleMarker(ll(start), { radius: 7, color: '#fff', fillColor: '#4aa3ff', fillOpacity: 1 }).bindTooltip('Start').addTo(g)
     if (dest) L.circleMarker(ll(dest), { radius: 7, color: '#fff', fillColor: '#f5a524', fillOpacity: 1 }).bindTooltip('Destination').addTo(g)
-    if (position) L.circleMarker(ll(position), { radius: 9, color: '#fff', weight: 3, fillColor: '#4aa3ff', fillOpacity: 1 }).bindTooltip('You').addTo(g)
-    if (all.length && !position) map.current.fitBounds(L.featureGroup(all).getBounds(), { padding: [30, 30], maxZoom: 15 })
+    if (position && follow && Number.isFinite(heading)) {
+      const icon = L.divIcon({
+        className: 'nav-arrow-marker',
+        html: `<span style="transform:rotate(${heading}deg)">▲</span>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+      })
+      L.marker(ll(position), { icon, interactive: false, zIndexOffset: 800 }).addTo(g)
+    } else if (position) L.circleMarker(ll(position), { radius: 9, color: '#fff', weight: 3, fillColor: '#4aa3ff', fillOpacity: 1 }).bindTooltip('You').addTo(g)
+    if (follow && position) map.current.setView(ll(position), Math.max(map.current.getZoom(), 16), { animate: true })
+    else if (all.length && !position) map.current.fitBounds(L.featureGroup(all).getBounds(), { padding: [30, 30], maxZoom: 15 })
     map.current.invalidateSize()
-  }, [routes, selectedId, alt, incidents, heatmapIncidents, position, start, dest, mode, safePoints])
-  return <div className="map-shell"><div ref={el} className="map" style={{ height: '100%', minHeight: 300 }} /><div className="map-key"><b>Map signals</b><span><i className="key-dot incident" />Reported incident intensity</span><span><i className="key-line route" />Selected route</span><span><i className="key-line safer" />Safer alternative</span>{mode === 'heatmap' && <span>Route colored by segment safety: green safe, amber caution, red risky</span>}{mode === 'safepoints' && <span><i className="key-dot" style={{ background: '#3ddc97' }} />Safe point</span>}<span>Click the map to set destination</span></div></div>
+  }, [routes, selectedId, alt, incidents, heatmapIncidents, position, start, dest, mode, safePoints, follow, heading])
+  return <div className="map-shell"><div ref={el} className="map" style={{ height: '100%', minHeight: 300 }} />{!follow && <div className="map-key"><b>Map signals</b><span><i className="key-dot incident" />Reported incident intensity</span><span><i className="key-line route" />Selected route</span><span><i className="key-line safer" />Safer alternative</span>{mode === 'heatmap' && <span>Route colored by segment safety: green safe, amber caution, red risky</span>}{mode === 'safepoints' && <span><i className="key-dot" style={{ background: '#3ddc97' }} />Safe point</span>}<span>Click the map to set destination</span></div>}</div>
 }
